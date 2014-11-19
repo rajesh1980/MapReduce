@@ -1,103 +1,94 @@
 package com.Rajesh.mapreduce;
 
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.io.IOException;
-import java.net.URI;
-import java.util.HashMap;
-import java.util.Map;
-import org.apache.hadoop.filecache.DistributedCache;
+import java.io.*;
+import java.util.*;
+
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.*;
 import org.apache.hadoop.conf.*;
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.MultipleInputs;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 
 
 public class Patent3 {
 
-	public static class MyMapper extends Mapper<LongWritable,Text, Text, Text> {
+	public static class PatentMap extends Mapper<LongWritable,Text, IntWritable, Text> {
+	
+		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 		
-		//Declare HashMap to store cached Dept file for Patent3
-		private Map<Integer, String> ClassMap = new HashMap<Integer, String>() ;
-		
-		protected void setup(Context context) throws IOException {
-			
-			Path[] files = DistributedCache.getLocalCacheFiles(context.getConfiguration());
-			
-			for (Path p : files) {
-				if(p.getName().equals("Classes.txt")) {
-					BufferedReader br = new BufferedReader(new FileReader(p.toString()));
-					String line = br.readLine() ;
-					
-					while(line != null) {
-				    String[] column = line.split("\t");
-					
-				    try {
-				    int nclass = Integer.parseInt(column[0]);
-					String title = column[1];
-					ClassMap.put(nclass, title) ;
-				    }
-				    catch (NumberFormatException e) {
-				    	System.out.println("Number format exception 1" + e);
-				    }
-					line = br.readLine() ;
-					}
-					br.close();
-				}
-				
+			String[] column = value.toString().split(",");
+			String patent = column[0] ;
+			try {
+					int asignee = Integer.parseInt(column[6]) ;
+					context.write(new IntWritable(asignee), new Text("PAT" +"\t" + patent));
 			}
-			
-
-			if (ClassMap.isEmpty()) {
-				throw new IOException("Unable to load Dept data.");
+			catch (NumberFormatException e) {
+				System.out.println("Number Format Exception" + e); 
 			}
-		
 			
 		}
 		
-		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException{
+	}
+
+	public static class AsigneeMap extends Mapper<LongWritable,Text, IntWritable, Text> {
+		
+		public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
 			
-		    String line = value.toString();
-		    String[] column = line.split(",");
-			String patent = column[0];
+			String[] column = value.toString().split(",");
+			String coname = column[1];
+			
 			try {
-			int nclass = Integer.parseInt(column[9]);
-			if (ClassMap.containsKey(nclass)){
-				context.write(new Text(patent), new Text(ClassMap.get(nclass))) ;
+				int asignee = Integer.parseInt(column[0]) ;
+				context.write(new IntWritable(asignee), new Text("ASN"+ "\t" + coname));
+			}
+			catch (NumberFormatException e) {
+			System.out.println("Number Format Exception" + e); 
+			}			
+			
+		}
+		
+	}
+
+	public static class MyReducer extends Reducer<IntWritable, Text, Text, Text> {
+		
+		public void reduce(IntWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
+			
+			Text coname = new Text() ;
+			ArrayList<String> patents = new ArrayList<String>() ;
+			
+			for (Text value : values) {
+				String [] column = value.toString().split("\t") ;
+				if (column[0].equals("PAT")) {
+					patents.add(column[1]);
+				} else {
+					coname.set(column[1]);
 				}
 			}
-			catch(NumberFormatException e) {
-				System.out.println("Number format exception 2" + e);
+			
+			for (String patent : patents) {
+				context.write(new Text(patent), coname);
 			}
-			}
+		}
 	}
-	
-	
 	public static void main(String[] args)  throws IOException, ClassNotFoundException, InterruptedException{
 		
 		Configuration conf = new Configuration();
 		Job job = new Job(conf, "Patent3");
 		job.setJarByClass(Patent3.class);
-		job.setNumReduceTasks(0);
-		
-	    try{
-	        DistributedCache.addCacheFile(new URI("/user/cloudera/Rajesh/Lookup/Classes.txt"), job.getConfiguration());
-	        }catch(Exception e){
-	        	System.out.println(e);
-	        }
-		
-		job.setMapperClass(MyMapper.class);
-		
-		job.setMapOutputKeyClass(Text.class);
+		job.setReducerClass(MyReducer.class) ;
+//		job.setNumReduceTasks(0);
+
+		job.setMapOutputKeyClass(IntWritable.class);
 		job.setMapOutputValueClass(Text.class);
 			
 		job.setOutputKeyClass(Text.class);
 		job.setOutputValueClass(Text.class);
 		
-		FileInputFormat.addInputPath(job, new Path(args[0]));
-		FileOutputFormat.setOutputPath(job, new Path(args[1]));
+		MultipleInputs.addInputPath(job, new Path(args[0]), TextInputFormat.class, PatentMap.class);
+		MultipleInputs.addInputPath(job, new Path(args[1]), TextInputFormat.class, AsigneeMap.class);
+		FileOutputFormat.setOutputPath(job, new Path(args[2]));
 	
 		job.waitForCompletion(true);
 	}
